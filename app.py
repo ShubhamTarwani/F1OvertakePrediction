@@ -69,17 +69,27 @@ ax.legend()
 st.pyplot(fig)
 
 # --------------------------
-# Detect Overtakes
+# Detect Overtakes (refined)
 # --------------------------
 st.subheader("📊 Detected Overtakes")
 
-pos_data = session.laps[['Driver', 'LapNumber', 'Position']]
+pos_data = session.laps[['Driver', 'LapNumber', 'Position', 'PitOutTime', 'PitInTime', 'LapTime']].copy()
 overtakes = []
 
 for drv in pos_data['Driver'].unique():
-    drv_laps = pos_data[pos_data['Driver'] == drv].sort_values('LapNumber')
+    drv_laps = pos_data[pos_data['Driver'] == drv].sort_values('LapNumber').reset_index(drop=True)
     drv_laps['PrevPos'] = drv_laps['Position'].shift(1)
-    changes = drv_laps[drv_laps['Position'] < drv_laps['PrevPos']]
+    drv_laps['PrevLapTime'] = drv_laps['LapTime'].shift(1)
+
+    # Filter out pit stop laps (LapTime > 2× median lap time)
+    median_laptime = drv_laps['LapTime'].median()
+    drv_laps['IsPitLap'] = drv_laps['LapTime'] > (2 * median_laptime)
+
+    changes = drv_laps[
+        (drv_laps['Position'] < drv_laps['PrevPos']) &
+        (~drv_laps['IsPitLap'])  # exclude pit laps
+    ]
+
     for _, row in changes.iterrows():
         overtakes.append({
             "Driver": drv,
@@ -90,7 +100,7 @@ for drv in pos_data['Driver'].unique():
 
 overtakes_df = pd.DataFrame(overtakes)
 if not overtakes_df.empty:
-    st.success(f"Detected {len(overtakes_df)} overtakes.")
+    st.success(f"Detected {len(overtakes_df)} overtakes (excluding pit stops).")
     st.dataframe(overtakes_df)
 else:
     st.info("No overtakes detected in this session.")
@@ -104,7 +114,7 @@ def prepare_overtake_dataset(session):
     df = session.laps[['Driver', 'LapNumber', 'Position', 'LapTime', 'Compound', 'Stint']].copy()
     df = df.dropna(subset=['Position'])
     df['LapTimeSeconds'] = df['LapTime'].dt.total_seconds()
-    df['PositionChange'] = df.groupby('Driver')['Position'].diff(-1)  # if positive -> gained position next lap
+    df['PositionChange'] = df.groupby('Driver')['Position'].diff(-1)
     df['OvertakeNextLap'] = (df['PositionChange'] > 0).astype(int)
     df['TireAge'] = df.groupby('Driver')['LapNumber'].rank(method='first').astype(int)
     df['IsTop5'] = (df['Position'] <= 5).astype(int)
@@ -136,9 +146,9 @@ st.write(f"✅ Model trained (Accuracy: {acc:.2f})")
 # --------------------------
 # Predict Overtake Probability for Selected Driver
 # --------------------------
-driver_lap = data[data['Driver'] == driver_code].sort_values('LapNumber').iloc[-1]  # last lap
+driver_lap = data[data['Driver'] == driver_code].sort_values('LapNumber').iloc[-1]
 driver_features = driver_lap[features].to_frame().T
-prob = model.predict_proba(driver_features)[0][1]  # probability of overtake next lap
+prob = model.predict_proba(driver_features)[0][1]
 
 st.metric(label=f"Predicted Overtake Probability for {driver_code}", value=f"{prob*100:.1f}%")
 
